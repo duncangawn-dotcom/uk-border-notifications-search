@@ -1,9 +1,141 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>UK Border Notifications Search</title>
+  <meta charset="UTF-8">
+  <title>UK Border Notifications Search (Live from FSA)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { padding: 20px; }
+    table { font-size: 0.9rem; }
+    .loading { color: #0d6efd; }
+  </style>
 </head>
 <body>
-    <h1>Welcome to the UK Border Notifications Search</h1>
+  <div class="container">
+    <h1>UK Border Notifications Search</h1>
+    <p class="text-muted">Fetches official FSA CSVs live • Covers Oct 2023 – Aug 2025 • No data stored on this site</p>
+
+    <!-- Filters -->
+    <div class="row mb-4">
+      <div class="col-md-3">
+        <label>Months to load (select multiple)</label>
+        <select id="months" multiple class="form-control" size="12"></select>
+      </div>
+      <div class="col-md-3">
+        <label>Origin Country</label>
+        <input id="country" class="form-control" placeholder="e.g. Türkiye, Turkey, China">
+      </div>
+      <div class="col-md-3">
+        <label>Hazard / Reason contains</label>
+        <input id="hazard" class="form-control" placeholder="e.g. aflatoxin, salmonella, pesticide">
+      </div>
+      <div class="col-md-3">
+        <label>Product / Commodity</label>
+        <input id="product" class="form-control" placeholder="e.g. figs, pistachios, sesame">
+      </div>
+    </div>
+
+    <button onclick="loadAndSearch()" class="btn btn-primary btn-lg mb-3">🔄 Load selected months & Search</button>
+
+    <div id="results" class="mt-3"></div>
+    <table id="table" class="table table-striped table-hover mt-3" style="display:none"></table>
+  </div>
+
+  <script>
+    // ALL OFFICIAL CSVs (newest to oldest) — automatically added from FSA CKAN
+    const csvList = [
+      {name: "August 2025", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/IOCAug2025.csv"},
+      {name: "July 2025",   url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/IOCJuly2025.csv"},
+      {name: "June 2025",   url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/IOCJune2025.csv"},
+      {name: "May 2025",    url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNDataMay2025.csv"},
+      {name: "April 2025",  url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNApril2025.csv"},
+      {name: "March 2025",  url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNMarch2025.csv"},
+      {name: "February 2025", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNFebruary2025.csv"},
+      {name: "January 2025", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNJanuary2025.csv"},
+      {name: "December 2024", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNDecember2024.csv"},
+      {name: "November 2024", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNNovember2024.csv"},
+      {name: "October 2024", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNOctober2024.csv"},
+      {name: "September 2024", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNSeptember2024.csv"},
+      {name: "August 2024", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNAugust2024.csv"},
+      {name: "July 2024",   url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNJuly2024.csv"},
+      {name: "June 2024",   url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNDataJun2024.csv"},
+      {name: "May 2024",    url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNDataMay2024.csv"},
+      {name: "April 2024",  url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNDataApr2024.csv"},
+      {name: "March 2024",  url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNDataMar2024.csv"},
+      {name: "February 2024", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNDataFeb2024.csv"},
+      {name: "January 2024", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/BNDataJan2024.csv"},
+      {name: "December 2023", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/fsa-catalogue2/BN%20Data%20December23.csv"},
+      {name: "November 2023", url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/fsa-catalogue2/BN%20Data%20November23.csv"},
+      {name: "October 2023",  url: "https://fsaopendata.blob.core.windows.net/opendatacatalog/fsa-catalogue2/BN%20Data%20October23.csv"}
+    ];
+
+    // Populate month selector (newest first)
+    const select = document.getElementById("months");
+    csvList.forEach((item, i) => {
+      const opt = document.createElement("option");
+      opt.value = i;
+      opt.textContent = item.name;
+      opt.selected = true;               // default: all selected
+      select.appendChild(opt);
+    });
+
+    async function loadAndSearch() {
+      const selectedIndexes = Array.from(select.selectedOptions).map(o => parseInt(o.value));
+      const selectedCSVs = selectedIndexes.map(i => csvList[i]);
+
+      document.getElementById("results").innerHTML = `<p class="loading">Loading ${selectedCSVs.length} CSV file(s) in your browser…</p>`;
+      
+      let allData = [];
+      for (const csv of selectedCSVs) {
+        try {
+          const response = await fetch(csv.url);
+          const text = await response.text();
+          const parsed = Papa.parse(text, {header: true, skipEmptyLines: true});
+          allData = allData.concat(parsed.data);
+        } catch(e) {
+          console.error("Failed to load", csv.name);
+        }
+      }
+
+      // Filters
+      const countryFilter = document.getElementById("country").value.toLowerCase().trim();
+      const hazardFilter  = document.getElementById("hazard").value.toLowerCase().trim();
+      const productFilter = document.getElementById("product").value.toLowerCase().trim();
+
+      const filtered = allData.filter(row => {
+        if (!row) return false;
+        const country = (row["Country"] || row["Country of Origin"] || "").toLowerCase();
+        const hazard  = (row["Hazard"] || row["Reason"] || "").toLowerCase();
+        const product = (row["Commodity"] || row["Product"] || "").toLowerCase();
+        return (!countryFilter || country.includes(countryFilter)) &&
+               (!hazardFilter  || hazard.includes(hazardFilter)) &&
+               (!productFilter || product.includes(productFilter));
+      });
+
+      // Render table (works with old + new column names)
+      const table = document.getElementById("table");
+      table.style.display = "table";
+      table.innerHTML = `
+        <thead><tr>
+          <th>Date</th><th>Country</th><th>Product / Commodity</th><th>Hazard / Reason</th>
+        </tr></thead>
+        <tbody></tbody>`;
+      const tbody = table.querySelector("tbody");
+
+      filtered.forEach(row => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${row["DateBNRaised"] || row["Date Raised"] || row["Date"] || ""}</td>
+          <td>${row["Country"] || row["Country of Origin"] || ""}</td>
+          <td>${row["Commodity"] || row["Product"] || ""}</td>
+          <td>${row["Hazard"] || row["Reason"] || ""}</td>`;
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById("results").innerHTML = 
+        `<p class="text-success">${filtered.length} matches found (loaded ${allData.length} total rows)</p>`;
+    }
+  </script>
 </body>
 </html>
